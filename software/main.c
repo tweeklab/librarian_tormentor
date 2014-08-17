@@ -170,14 +170,11 @@ void main(void)
         asm("clrf _status");
     }
 
-    // Activate the low-side switch which allows the
-    // LED and piezo element to work.
-    ENABLE = 1;
-
     while(1) {
         GP1 = 0;
         safe_delay_ms(MAIN_LOOP_DELAY_MS);
         if (SW) {
+            ENABLE = 1;
             LED = 1;
             if (!status.keydown) {
                 status.keydown = 1;
@@ -257,7 +254,15 @@ void main(void)
                         CLRF _beep_off_delay
                         MOVF _off_minutes,W
                         MOVWF _tmp
-                        MOVLW 0x1a
+                        // This should be 0x1a (26 loops per minute)
+                        // but because the WDT oscillator is spec'd at
+                        // a 5V Vcc and we are running at 3v, adjust this
+                        // down a bit based on measurements at both voltages
+                        // to get closer to the actual number of minutes.
+                        // Because the WDT isn't really designed for tight
+                        // timing, this will never be terribly accurate,
+                        // but it should not really matter here.
+                        MOVLW 0x15
                     add_more_beep_off_delay:
                         ADDWF _beep_off_delay,F
                         DECFSZ _tmp
@@ -279,6 +284,12 @@ void main(void)
         }
 
 ignore_button:
+        if (mode != MODE_OFF) {
+            // Activate the low-side switch which allows the
+            // LED and piezo element to work.
+            ENABLE = 1;
+        }
+
         // LED pattern processing logic.  If the user is holding down
         // the switch, don't touch the LED.
         if (!status.keydown) {
@@ -341,6 +352,7 @@ ignore_button:
                 status.noise = 0;
             }
         }
+        GP1 = 0;
     }
     // NOTREACHED
 }
