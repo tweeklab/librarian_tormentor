@@ -55,7 +55,7 @@
 
 // Beep frequence in Hz.  Computed down to the actual delay
 // value by the preprocessor in the main loop
-#define BEEP_FREQ 4000
+#define BEEP_FREQ 6000
 
 // Tracks the number of sleep cycles we wait until
 // buzzing again.  This is in units of the WDT timeout
@@ -200,7 +200,7 @@ void main(void)
                 mode = MODE_CONFIG;
                 led_pattern = 0b10000000;
                 status.config_type = 0;
-                on_seconds = 0;
+                //on_seconds = 0;
             } else {
                 if (!status.config_type) {
                     // We were setting on time, we now change
@@ -221,12 +221,13 @@ void main(void)
             if (status.keydown) {
                 timer = 0;
                 status.keydown = 0;
-                status.off_pending = 0;
                 if (mode == MODE_TORMENT) {
                     timer = 2;
                     status.noise = 1;
                 } else if (mode == MODE_CONFIG) {
                     if (!status.config_type) {
+                        if (status.off_pending)
+                            on_seconds = 0;
                         ++on_seconds;
 #asm
                         MOVLW 0x07
@@ -247,6 +248,7 @@ void main(void)
                         status.noise = 1;
                     }
                 }
+                status.off_pending = 0;
             } else {
                 if (mode == MODE_TORMENT) {
                     if (status.init_beep_off_delay) {

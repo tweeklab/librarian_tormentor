@@ -1,1 +1,607 @@
-Unable to generate the disassembly listing file.  Please make sure that you have built the project with symbol information.
+Disassembly Listing for librarian_tormentor
+Generated From:
+C:/Users/pdamore/Documents/GitHub/librarian_tormentor/software/dist/XC8_PIC10F200/debug/software.debug.elf
+Aug 23, 2014 10:38:47 AM
+
+---  C:/Users/pdamore/Documents/GitHub/librarian_tormentor/software/main.c  -----------------------------
+1:             #include <xc.h>         /* XC8 General Include File */
+2:             
+3:             // PIC10F200 Configuration Bit Settings
+4:             #pragma config WDTE = ON        // Watchdog Timer (WDT enabled)
+5:             #pragma config CP = OFF         // Code Protect (Code protection off)
+6:             #pragma config MCLRE = OFF      // Master Clear Enable (GP3/MCLR pin fuction is digital I/O, MCLR internally tied to VDD)
+7:             
+8:             #include <stdint.h>        /* For uint8_t definition */
+9:             #include <string.h>       /* For true/false definition */
+10:            
+11:            // Required by the C library delay routines
+12:            // The PIC10F200 only has an internal oscillator
+13:            // option running at 4MHz.  That makes for a 1uS
+14:            // instruction cycle.
+15:            #define _XTAL_FREQ 4000000
+16:            
+17:            // The amount of time we wait while buzzing to check
+18:            // if we should stop buzzing.  This is the count on
+19:            // TMR0 we check for to see how much time has passed.
+20:            // At 1:256 prescaler this is about 50mS
+21:            #define BUZZ_DONE_COUNT 195
+22:            // Number of times TMR0 has to hit BUZZ_DONE_COUNT
+23:            // in order to equal 1 second of beeping.
+24:            #define BUZZ_SECOND_COUNT 20
+25:            // Amount of time we sleep after detecting a key down
+26:            // to make sure we have filtered out bounces.  This is
+27:            // specified as the max time by Panasonic for the switch
+28:            // we are using.  This value is passed to safe_delay_ms()
+29:            // which is defined later.
+30:            #define DEBOUNCE_MS 10
+31:            // The amount of delay we add to each go around the main loop.
+32:            // This is used as a base for timing the blinking of the LED
+33:            // and sensing when the switch is held down.
+34:            #define MAIN_LOOP_DELAY_MS 100
+35:            
+36:            // OPTION bits while we are in sleep mode, regardless of
+37:            // whether we are sleeping between buzzing or we are sleeping
+38:            // because someone turned us "off"
+39:            // This gives us a 1:128 prescaler assigned to the WDT
+40:            #define OPTION_SLEEP (PSA|PS0|PS1|PS2)
+41:            // OPTION bits configured upon wake up.
+42:            // This gives a 1:256 prescaler assigned to TMR0
+43:            #define OPTION_WAKE (nGPWU|PS0|PS1|PS2)
+44:            
+45:            // Friendlier names for the outputs
+46:            #define LED GP0
+47:            #define BUZZ GP1
+48:            #define ENABLE GP2
+49:            // Friendlier names for the switch input.  Note we
+50:            // take advantage of the internal pullup on this pin so
+51:            // the switch is actually wired to pull down the pin when
+52:            // pressed, hence the negation, so we don't have to think
+53:            // about it in the code everywhere.
+54:            #define SW (!GP3)
+55:            
+56:            // Beep frequence in Hz.  Computed down to the actual delay
+57:            // value by the preprocessor in the main loop
+58:            #define BEEP_FREQ 6000
+59:            
+60:            // Tracks the number of sleep cycles we wait until
+61:            // buzzing again.  This is in units of the WDT timeout
+62:            // interval.
+63:            persistent uint8_t beep_off_delay;
+64:            // Sets up the blink pattern of the LED, generally
+65:            // for config mode.  For each bit that is a 1, starting
+66:            // with MSB, the LED will be on for MAIN_LOOP_DELAY_MS, off for
+67:            // MAIN_LOOP_DELAY_MS.  When the bit is 0, only MAIN_LOOP_DELAY_MS is consumed.
+68:            persistent uint8_t led_pattern;
+69:            // Iterator for safe_delay_ms
+70:            persistent uint8_t tmp;
+71:            // Generic counter for things we need to time.  We need to
+72:            // time the length of a beep, and we need to time the amount
+73:            // of time a key is held down.  We don't do those things at once
+74:            // so just use one variable to save space.
+75:            persistent uint8_t timer;
+76:            
+77:            #define MODE_OFF 0x0
+78:            #define MODE_CONFIG 0x1
+79:            #define MODE_TORMENT 0x2
+80:            persistent uint8_t     mode;
+81:            
+82:            persistent struct status_t {
+83:                // 1 when we should be making noise
+84:                uint8_t     noise:1;
+85:                // 1 when we have confirmed the key is down (after debounce).
+86:                // This is used to detect edges (transitions from up<->down
+87:                uint8_t     keydown:1;
+88:                // The operational mode of the device.  Values are defined here:
+89:            
+90:                // 0 - configure on time, 1 - configure off time
+91:                uint8_t     config_type:1;
+92:                uint8_t     off_pending:1;
+93:                uint8_t     init_beep_off_delay:1;
+94:            } status;
+95:            
+96:            persistent uint8_t on_seconds;
+97:            persistent uint8_t off_minutes;
+98:            
+99:            // Standard bits we need to do in order to put the chip
+100:           // to sleep.
+101:           #define GOTO_SLEEP \
+102:               GPIO = 0;\
+103:               CLRWDT(); \
+104:               TMR0 = 0; \
+105:               OPTION = OPTION_SLEEP; \
+106:               SLEEP();
+107:           
+108:           void __safe_delay_ms(void)
+00FE  0AED     GOTO 0xED
+109:           {
+110:               for (;tmp;tmp--) {
+00ED  0238     MOVF tmp, F
+00EE  0643     BTFSC STATUS, 0x2
+00EF  0800     RETLW 0x0
+00F8  0C01     MOVLW 0x1
+111:                   CLRWDT();
+00F0  0004     CLRWDT
+112:                   __delay_ms(1);
+00F1  0CF9     MOVLW 0xF9
+00F2  0039     MOVWF __pcstackBANK0
+00F3  0000     NOP
+00F4  02F9     DECFSZ __pcstackBANK0, F
+00F5  0AF3     GOTO 0xF3
+00F6  0AF7     GOTO 0xF7
+00F7  0000     NOP
+113:               }
+114:           }
+115:           
+116:           void main(void)
+117:           {
+118:               // Define this in main because it relies on a variable local to main.
+119:           #define safe_delay_ms(x) \
+120:               tmp=x; \
+121:               __safe_delay_ms();
+122:           
+123:           
+124:               // We need the weak pullups for the programmer checks
+125:               // so set up the options now.
+126:               // We will need the pin wake-on-change later, but keep
+127:               // it off for now.
+128:               CLRWDT();
+0009  0004     CLRWDT
+129:               TRIS = 0x0f;
+000A  0C0F     MOVLW 0xF
+000B  0006     TRIS GPIO
+130:               OPTION = OPTION_WAKE;
+000C  0C87     MOVLW 0x87
+000D  0002     OPTION
+131:           
+132:               // Programmer protection.  We need this because
+133:               // we are using the ICSP clock and data lines
+134:               // for other things.  Normally I'd avoid this but on a chip
+135:               // with only 3 GPIO lines (GP3 is input only), this has to
+136:               // be done...
+137:               // The programmer will hold the data and clock
+138:               // lines low when it's connected.  Since we have weak
+139:               // pull-ups turned on and everything is in input mode now,
+140:               // Check to see if either line is pulled low.  If it is,
+141:               // Stop.
+142:               // This can be used by turning OFF the target power, connecting
+143:               // the programmer, and then turning ON the target power.  This
+144:               // will also save us in the reset after programming by making sure
+145:               // the program doesn't run and drive outputs with the programmer
+146:               // still connected.  Once you disconnect the programmer, you will
+147:               // need to reset the device.
+148:               if (!LED || !BUZZ) {
+000E  0706     BTFSS GPIO, 0x0
+000F  0A12     GOTO 0x12
+0010  0626     BTFSC GPIO, 0x1
+0011  0A14     GOTO 0x14
+149:                   while(1)
+0013  0A12     GOTO 0x12
+150:                       CLRWDT();
+0012  0004     CLRWDT
+151:               }
+152:           
+153:               // Main program starting here.
+154:           
+155:               // IO setup
+156:               GPIO = 0x00;
+0014  0066     CLRF GPIO
+157:               TRIS = 0x08;
+0015  0C08     MOVLW 0x8
+0016  0006     TRIS GPIO
+158:           
+159:               if (__resetbits & _STATUS_GPWUF_MASK) {
+0017  06F0     BTFSC __resetbits, 0x7
+0018  0A25     GOTO 0x25
+160:                   // Wake up from pin change
+161:               } else if (!(__resetbits & (_STATUS_nTO_MASK|_STATUS_nPD_MASK))) {
+0019  0210     MOVF __resetbits, W
+001A  0E18     ANDLW 0x18
+001B  0643     BTFSC STATUS, 0x2
+001C  0A25     GOTO 0x25
+162:                   // Wake up from sleep
+163:               } else {
+164:                   // Full power-up
+165:                   mode = MODE_OFF;
+001D  0073     CLRF mode
+166:                   led_pattern = 0;
+001E  0072     CLRF led_pattern
+167:                   on_seconds = 1;
+001F  0075     CLRF on_seconds
+0020  02B5     INCF on_seconds, F
+168:                   timer = 0;
+0021  0077     CLRF timer
+169:                   off_minutes = 1;
+0022  0074     CLRF off_minutes
+0023  02B4     INCF off_minutes, F
+170:                   asm("clrf _status");
+0024  0076     CLRF status
+171:               }
+172:           
+173:               while(1) {
+00EC  0A25     GOTO 0x25
+174:                   GP1 = 0;
+0025  0426     BCF GPIO, 0x1
+175:                   safe_delay_ms(MAIN_LOOP_DELAY_MS);
+0026  0C64     MOVLW 0x64
+0027  0038     MOVWF tmp
+0028  09FE     CALL 0xFE
+176:                   if (SW) {
+0029  0666     BTFSC GPIO, 0x3
+002A  0A61     GOTO 0x61
+177:                       ENABLE = 1;
+002B  0546     BSF GPIO, 0x2
+178:                       LED = 1;
+002C  0506     BSF GPIO, 0x0
+179:                       if (!status.keydown) {
+002D  0636     BTFSC status, 0x1
+002E  0A31     GOTO 0x31
+180:                           status.keydown = 1;
+002F  0536     BSF status, 0x1
+181:                           timer = 0;
+0030  0077     CLRF timer
+182:                       }
+183:                       if (timer++ != 10)
+0031  0C01     MOVLW 0x1
+0032  003F     MOVWF 0x1F
+0033  021F     MOVF 0x1F, W
+0034  01F7     ADDWF timer, F
+0035  0217     MOVF timer, W
+0036  0F0B     XORLW 0xB
+0037  0743     BTFSS STATUS, 0x2
+0038  0AAA     GOTO 0xAA
+184:                           goto ignore_button;
+185:                       timer = 0;
+0039  0077     CLRF timer
+186:                       LED = 0;
+003A  0406     BCF GPIO, 0x0
+187:                       safe_delay_ms(100);
+003B  0C64     MOVLW 0x64
+003C  0038     MOVWF tmp
+003D  09FE     CALL 0xFE
+188:                       LED = 1;
+003E  0506     BSF GPIO, 0x0
+189:                       if (status.off_pending) {
+003F  0776     BTFSS status, 0x3
+0040  0A44     GOTO 0x44
+190:                           LED = 0;
+0041  0406     BCF GPIO, 0x0
+191:                           mode = MODE_OFF;
+0042  0073     CLRF mode
+192:                           goto ignore_button;
+0043  0AAA     GOTO 0xAA
+193:                       }
+194:                       if (mode == MODE_OFF) {
+0044  0233     MOVF mode, F
+0045  0643     BTFSC STATUS, 0x2
+0046  0A5C     GOTO 0x5C
+195:                           mode = MODE_TORMENT;
+196:                           status.init_beep_off_delay = 1;
+197:                       } else if (mode != MODE_CONFIG) {
+0047  0213     MOVF mode, W
+0048  0F01     XORLW 0x1
+0049  0643     BTFSC STATUS, 0x2
+004A  0A52     GOTO 0x52
+198:                           // Entering config mode for the first time,
+199:                           // we are goign to set the on time.
+200:                           mode = MODE_CONFIG;
+004B  0073     CLRF mode
+004C  02B3     INCF mode, F
+201:                           led_pattern = 0b10000000;
+004D  0C80     MOVLW 0x80
+004E  0032     MOVWF led_pattern
+202:                           status.config_type = 0;
+004F  0456     BCF status, 0x2
+203:                           on_seconds = 0;
+0050  0075     CLRF on_seconds
+204:                       } else {
+0051  0A5F     GOTO 0x5F
+205:                           if (!status.config_type) {
+0052  0656     BTFSC status, 0x2
+0053  0A59     GOTO 0x59
+206:                               // We were setting on time, we now change
+207:                               // to setting off time.
+208:                               led_pattern = 0b11000000;
+0054  0CC0     MOVLW 0xC0
+0055  0032     MOVWF led_pattern
+209:                               status.config_type = 1;
+0056  0556     BSF status, 0x2
+210:                               off_minutes = 0;
+0057  0074     CLRF off_minutes
+211:                           } else if (status.config_type) {
+0058  0A5F     GOTO 0x5F
+0059  0756     BTFSS status, 0x2
+005A  0A5F     GOTO 0x5F
+212:                               // We were setting off time, now go back to
+213:                               // tormenting people
+214:                               led_pattern = 0;
+005B  0072     CLRF led_pattern
+215:                               mode = MODE_TORMENT;
+005C  0C02     MOVLW 0x2
+005D  0033     MOVWF mode
+216:                               status.init_beep_off_delay = 1;
+005E  0596     BSF status, 0x4
+217:                           }
+218:                       }
+219:                       status.off_pending = 1;
+005F  0576     BSF status, 0x3
+220:                   } else {
+0060  0AAA     GOTO 0xAA
+221:                       if (status.keydown) {
+0061  0736     BTFSS status, 0x1
+0062  0A86     GOTO 0x86
+222:                           timer = 0;
+0063  0077     CLRF timer
+223:                           status.keydown = 0;
+0064  0436     BCF status, 0x1
+224:                           status.off_pending = 0;
+0065  0476     BCF status, 0x3
+225:                           if (mode == MODE_TORMENT) {
+0066  0213     MOVF mode, W
+0067  0F02     XORLW 0x2
+0068  0743     BTFSS STATUS, 0x2
+0069  0A6C     GOTO 0x6C
+226:                               timer = 2;
+006A  0C02     MOVLW 0x2
+006B  0A84     GOTO 0x84
+227:                               status.noise = 1;
+228:                           } else if (mode == MODE_CONFIG) {
+006C  0213     MOVF mode, W
+006D  0F01     XORLW 0x1
+006E  0743     BTFSS STATUS, 0x2
+006F  0AA1     GOTO 0xA1
+229:                               if (!status.config_type) {
+0070  0656     BTFSC status, 0x2
+0071  0A7B     GOTO 0x7B
+230:                                   ++on_seconds;
+0072  0C01     MOVLW 0x1
+0073  003F     MOVWF 0x1F
+0074  021F     MOVF 0x1F, W
+0075  01F5     ADDWF on_seconds, F
+231:           #asm
+232:                                   MOVLW 0x07
+0076  0C07     MOVLW 0x7
+233:                                   ANDWF _on_seconds,F
+0077  0175     ANDWF on_seconds, F
+234:                                   BTFSC 3,2
+0078  0643     BTFSC STATUS, 0x2
+235:                                   INCF _on_seconds
+0079  02B5     INCF on_seconds, F
+236:           #endasm
+237:                                   status.noise = 1;
+007A  0AA0     GOTO 0xA0
+238:                               } else {
+239:                                   ++off_minutes;
+007B  0C01     MOVLW 0x1
+007C  003F     MOVWF 0x1F
+007D  021F     MOVF 0x1F, W
+007E  01F4     ADDWF off_minutes, F
+240:           #asm
+241:                                   MOVLW 0x07
+007F  0C07     MOVLW 0x7
+242:                                   ANDWF _off_minutes,F
+0080  0174     ANDWF off_minutes, F
+243:                                   BTFSC 3,2
+0081  0643     BTFSC STATUS, 0x2
+244:                                   INCF _off_minutes
+0082  02B4     INCF off_minutes, F
+245:           #endasm
+246:                                   timer = off_minutes;
+0083  0214     MOVF off_minutes, W
+0084  0037     MOVWF timer
+247:                                   status.noise = 1;
+0085  0AA0     GOTO 0xA0
+248:                               }
+249:                           }
+250:                       } else {
+251:                           if (mode == MODE_TORMENT) {
+0086  0213     MOVF mode, W
+0087  0F02     XORLW 0x2
+0088  0743     BTFSS STATUS, 0x2
+0089  0AA1     GOTO 0xA1
+252:                               if (status.init_beep_off_delay) {
+008A  0796     BTFSS status, 0x4
+008B  0A94     GOTO 0x94
+253:            #asm
+254:                                   CLRF _beep_off_delay
+008C  0071     CLRF beep_off_delay
+255:                                   MOVF _off_minutes,W
+008D  0214     MOVF off_minutes, W
+256:                                   MOVWF _tmp
+008E  0038     MOVWF tmp
+257:                                   // This should be 0x1a (26 loops per minute)
+258:                                   // but because the WDT oscillator is spec'd at
+259:                                   // a 5V Vcc and we are running at 3v, adjust this
+260:                                   // down a bit based on measurements at both voltages
+261:                                   // to get closer to the actual number of minutes.
+262:                                   // Because the WDT isn't really designed for tight
+263:                                   // timing, this will never be terribly accurate,
+264:                                   // but it should not really matter here.
+265:                                   MOVLW 0x15
+008F  0C15     MOVLW 0x15
+266:                               add_more_beep_off_delay:
+267:                                   ADDWF _beep_off_delay,F
+0090  01F1     ADDWF beep_off_delay, F
+268:                                   DECFSZ _tmp
+0091  02F8     DECFSZ tmp, F
+269:                                   GOTO add_more_beep_off_delay
+0092  0A90     GOTO 0x90
+270:           #endasm
+271:                                   status.init_beep_off_delay = 0;
+0093  0496     BCF status, 0x4
+272:                               }
+273:                               if (--beep_off_delay) {
+0094  0C01     MOVLW 0x1
+0095  00B1     SUBWF beep_off_delay, F
+0096  0643     BTFSC STATUS, 0x2
+0097  0A9E     GOTO 0x9E
+274:                                   GOTO_SLEEP;
+0098  0066     CLRF GPIO
+0099  0004     CLRWDT
+009A  0061     CLRF TMR0
+009B  0C0F     MOVLW 0xF
+009C  0002     OPTION
+009D  0003     SLEEP
+275:                               }
+276:                               status.init_beep_off_delay = 1;
+009E  0596     BSF status, 0x4
+277:                               timer = 0;
+009F  0077     CLRF timer
+278:                               status.noise = 1;
+00A0  0516     BSF status, 0x0
+279:                           }
+280:                       }
+281:                       if (mode == MODE_OFF) {
+00A1  0233     MOVF mode, F
+00A2  0743     BTFSS STATUS, 0x2
+00A3  0AAA     GOTO 0xAA
+282:                           GOTO_SLEEP;
+00A4  0066     CLRF GPIO
+00A5  0004     CLRWDT
+00A6  0061     CLRF TMR0
+00A7  0C0F     MOVLW 0xF
+00A8  0002     OPTION
+00A9  0003     SLEEP
+283:                       }
+284:                   }
+285:           
+286:           ignore_button:
+287:                   if (mode != MODE_OFF) {
+00AA  0213     MOVF mode, W
+00AB  0743     BTFSS STATUS, 0x2
+288:                       // Activate the low-side switch which allows the
+289:                       // LED and piezo element to work.
+290:                       ENABLE = 1;
+00AC  0546     BSF GPIO, 0x2
+291:                   }
+292:           
+293:                   // LED pattern processing logic.  If the user is holding down
+294:                   // the switch, don't touch the LED.
+295:                   if (!status.keydown) {
+00AD  0636     BTFSC status, 0x1
+00AE  0AC4     GOTO 0xC4
+296:                       if (!LED && (led_pattern & 0x80)) {
+00AF  0706     BTFSS GPIO, 0x0
+00B0  07F2     BTFSS led_pattern, 0x7
+00B1  0AB4     GOTO 0xB4
+297:                           LED = 1;
+00B2  0506     BSF GPIO, 0x0
+298:                       } else {
+00B3  0AC4     GOTO 0xC4
+299:                           LED = 0;
+00B4  0406     BCF GPIO, 0x0
+300:                           led_pattern = (led_pattern << 1) | (led_pattern >> 7);
+00B5  0212     MOVF led_pattern, W
+00B6  003F     MOVWF 0x1F
+00B7  0C07     MOVLW 0x7
+00B8  003A     MOVWF 0x1A
+00B9  0403     BCF STATUS, 0x0
+00BA  033F     RRF 0x1F, F
+00BB  02FA     DECFSZ 0x1A, F
+00BC  0AB9     GOTO 0xB9
+00BD  021F     MOVF 0x1F, W
+00BE  003F     MOVWF 0x1F
+00BF  0212     MOVF led_pattern, W
+00C0  003B     MOVWF 0x1B
+00C1  01DB     ADDWF 0x1B, W
+00C2  011F     IORWF 0x1F, W
+00C3  0032     MOVWF led_pattern
+301:                       }
+302:                   }
+303:           
+304:                   // Noise loop.  Put nothing else past this point.  The noise
+305:                   // loop uses TMR0 so clear it first.
+306:                   if (status.noise) {
+00C4  0716     BTFSS status, 0x0
+00C5  0AD1     GOTO 0xD1
+307:                       timer = 0;
+00C6  0077     CLRF timer
+308:                       if (timer==0) {
+00C7  0237     MOVF timer, F
+00C8  0743     BTFSS STATUS, 0x2
+00C9  0AD0     GOTO 0xD0
+309:           #asm
+310:                           MOVF _on_seconds,W
+00CA  0215     MOVF on_seconds, W
+311:                           MOVWF _tmp
+00CB  0038     MOVWF tmp
+312:                           MOVLW 0x14
+00CC  0C14     MOVLW 0x14
+313:                       add_more_noise:
+314:                           ADDWF _timer,F
+00CD  01F7     ADDWF timer, F
+315:                           DECFSZ _tmp
+00CE  02F8     DECFSZ tmp, F
+316:                           GOTO add_more_noise
+00CF  0ACD     GOTO 0xCD
+317:           #endasm
+318:                       }
+319:                       TMR0 = 0;
+00D0  0061     CLRF TMR0
+320:                   }
+321:                   while (status.noise) {
+00EA  0AD1     GOTO 0xD1
+322:                       CLRWDT();
+00D3  0004     CLRWDT
+323:                       if (TMR0 > BUZZ_DONE_COUNT) {
+00D4  0CC4     MOVLW 0xC4
+00D5  0081     SUBWF TMR0, W
+00D6  0703     BTFSS STATUS, 0x0
+00D7  0ADD     GOTO 0xDD
+324:                           TMR0 = 0;
+00D8  0061     CLRF TMR0
+325:           #asm
+326:                           // This just checks if timer has gone to 0.  The
+327:                           // Free compiler generated some seriously brain-dead assembly
+328:                           // for this check so I wrote my own.
+329:                           DECF _timer
+00D9  00F7     DECF timer, F
+330:                           BTFSC STATUS,2
+00DA  0643     BTFSC STATUS, 0x2
+331:                           BCF _status,0
+00DB  0416     BCF status, 0x0
+332:           #endasm
+333:                       } else {
+00DC  0ADF     GOTO 0xDF
+334:                           _delay(4);
+00DD  0ADE     GOTO 0xDE
+00DE  0ADF     GOTO 0xDF
+335:                       }
+336:           #asm
+337:                       // We fudge the parameter delay parameter to account
+338:                       // for initialization and intra-loop checks.  This works
+339:                       // out to be about 28us of overhead we need to factor
+340:                       // out of the delay loop, or 7 iterations of the loop.
+341:                       MOVLW ((1000000/BEEP_FREQ/8)-7);
+00DF  0C0D     MOVLW 0xD
+342:                       MOVWF _tmp
+00E0  0038     MOVWF tmp
+343:                   timeloop:
+344:                       NOP
+00E1  0000     NOP
+345:                       DECFSZ _tmp, F
+00E2  02F8     DECFSZ tmp, F
+346:                       GOTO timeloop
+00E3  0AE1     GOTO 0xE1
+347:                       NOP
+00E4  0000     NOP
+348:           #endasm
+349:                       // Toggle the piezo driver line
+350:                       GP1 = ~GP1;
+00E5  0C02     MOVLW 0x2
+00E6  01A6     XORWF GPIO, F
+351:                       // Shut up if someone hits the button
+352:                       if (SW) {
+00E7  0666     BTFSC GPIO, 0x3
+00E8  0AD1     GOTO 0xD1
+353:                           status.noise = 0;
+00E9  0416     BCF status, 0x0
+354:                       }
+355:                   }
+00D1  0716     BTFSS status, 0x0
+00D2  0AEB     GOTO 0xEB
+356:                   GP1 = 0;
+00EB  0426     BCF GPIO, 0x1
+357:               }
+358:               // NOTREACHED
+359:           }
+360:           
